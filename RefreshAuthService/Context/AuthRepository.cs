@@ -25,7 +25,12 @@ namespace RefreshAuthService.Context
             return _ctx.Clients.Find(clientId);
         } 
 
-        // @TODO : Add a Add CLient Class
+        public void AddClient(Client client)
+        {
+            _ctx.Clients.Add(client);
+            _ctx.SaveChanges();
+        }
+
         public async Task<bool> AddRefreshToken(RefreshToken token)
         {
             // Check if there is existing token for this user and client
