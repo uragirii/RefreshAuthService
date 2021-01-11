@@ -56,9 +56,26 @@ namespace RefreshAuthService.Providers
             throw new NotImplementedException();
         }
 
-        public Task ReceiveAsync(AuthenticationTokenReceiveContext context)
+        public async Task ReceiveAsync(AuthenticationTokenReceiveContext context)
         {
-            throw new NotImplementedException();
+            var allowedOrigin = "*";
+            context.OwinContext.Response.Headers.Add("Access-Control-Allow-Origin", new[] { allowedOrigin });
+            string refreshTokenId = context.Token;
+
+            using(AuthRepository _repo = new AuthRepository())
+            {
+                var oldToken = await _repo.FindRefreshToken(refreshTokenId);
+                if (oldToken != null)
+                {
+                    // Get the "Protected String" it will auto generate the new access token from it
+                    context.DeserializeTicket(oldToken.ProtectedTicket);
+                    var result = await _repo.RemoveRefreshToken(refreshTokenId);
+                    // Remove the old token as now a new Token will be generated using the CreateAsync method
+                }
+                // If token is not found then token is invalid
+                // Hence don't do anything request will fail
+
+            }
         }
     }
 }
