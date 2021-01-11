@@ -9,6 +9,8 @@ using Microsoft.AspNet.Identity.Owin;
 using Microsoft.Owin.Security;
 using Microsoft.Owin.Security.Cookies;
 using Microsoft.Owin.Security.OAuth;
+using RefreshAuthService.Context;
+using RefreshAuthService.Entities;
 using RefreshAuthService.Models;
 
 namespace RefreshAuthService.Providers
@@ -29,6 +31,10 @@ namespace RefreshAuthService.Providers
 
         public override async Task GrantResourceOwnerCredentials(OAuthGrantResourceOwnerCredentialsContext context)
         {
+            var allowedOrigin = "*";
+            
+            context.OwinContext.Response.Headers.Add("Access-Control-Allow-Origin", new[] { allowedOrigin });
+            
             var userManager = context.OwinContext.GetUserManager<ApplicationUserManager>();
 
             ApplicationUser user = await userManager.FindAsync(context.UserName, context.Password);
@@ -39,15 +45,14 @@ namespace RefreshAuthService.Providers
                 return;
             }
 
-            ClaimsIdentity oAuthIdentity = await user.GenerateUserIdentityAsync(userManager,
-               OAuthDefaults.AuthenticationType);
-            ClaimsIdentity cookiesIdentity = await user.GenerateUserIdentityAsync(userManager,
-                CookieAuthenticationDefaults.AuthenticationType);
+            var identity = new ClaimsIdentity(context.Options.AuthenticationType);
+            identity.AddClaim(new Claim(ClaimTypes.Name, context.UserName));
+            identity.AddClaim(new Claim("sub", context.UserName));
+            identity.AddClaim(new Claim("role", "user"));
 
-            AuthenticationProperties properties = CreateProperties(user.UserName);
-            AuthenticationTicket ticket = new AuthenticationTicket(oAuthIdentity, properties);
+            AuthenticationProperties properties = CreateProperties(user.UserName, context.ClientId);
+            AuthenticationTicket ticket = new AuthenticationTicket(identity, properties);
             context.Validated(ticket);
-            context.Request.Context.Authentication.SignIn(cookiesIdentity);
         }
 
         public override Task TokenEndpoint(OAuthTokenEndpointContext context)
@@ -62,11 +67,42 @@ namespace RefreshAuthService.Providers
 
         public override Task ValidateClientAuthentication(OAuthValidateClientAuthenticationContext context)
         {
-            // Resource owner password credentials does not provide a client ID.
-            if (context.ClientId == null)
+            // First get the clientId and client secret from the form body
+            string clientId = string.Empty;
+            string clientSecret = string.Empty;
+            Client client = null;
+            context.TryGetFormCredentials(out clientId, out clientSecret);
+
+            if(context.ClientId == null)
             {
-                context.Validated();
+                // Return a error if client id is not provided;
+                context.SetError("invalid_client_id", "Client ID cannot be null");
+                return Task.FromResult<object>(null);
             }
+
+            using(AuthRepository _repo = new AuthRepository())
+            {
+                client = _repo.FindClient(clientId);
+            }
+
+            if(client == null)
+            {
+                context.SetError("invalid_client_id", "Client ID must be registered before");
+                return Task.FromResult<object>(null);
+            }
+            if (string.IsNullOrWhiteSpace(clientSecret))
+            {
+                context.SetError("invalid_client_secret", "Client Secret must not be null");
+                return Task.FromResult<object>(null);
+            }
+            if(clientSecret != client.ClientSecret)
+            {
+                context.SetError("invalid_client_secret", "Client Secret is invalid");
+                return Task.FromResult<object>(null);
+            }
+
+            // If all the checks failed, validate the client;
+            context.Validated();
 
             return Task.FromResult<object>(null);
         }
@@ -86,10 +122,13 @@ namespace RefreshAuthService.Providers
             return Task.FromResult<object>(null);
         }
 
-        public static AuthenticationProperties CreateProperties(string userName)
+        public static AuthenticationProperties CreateProperties(string userName, string cliendId)
         {
             IDictionary<string, string> data = new Dictionary<string, string>
             {
+                {
+                        "as:client_id", (cliendId == null) ? string.Empty : cliendId
+                    },
                 { "userName", userName }
             };
             return new AuthenticationProperties(data);
